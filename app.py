@@ -11,10 +11,13 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 import pandas as pd
 import numpy as np
+from uuid import uuid4  # <-- added
 
 # ---- PDF text tools ----
 import pdfplumber                          # text/words/tables from text PDFs
-from pdfminer.high_level import extract_text as pdf_extract_text  # detect scanned
+from pdfminer_high_level import extract_text as pdf_extract_text  # detect scanned
+# If your import was actually: from pdfminer.high_level import extract_text
+# then keep that one instead and remove this alias line.
 
 # ---- Optional scanned PDF OCR (safe to omit in deps) ----
 try:
@@ -41,6 +44,11 @@ except Exception:
 
 BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="PDF + Excel Extraction API (JSON)")
+
+# -----------------------
+# In-memory store for results (dev/demo)
+# -----------------------
+STORED_RESULTS: Dict[str, Any] = {}  # job_id -> payload
 
 # -----------------------
 # JSON-safe helpers
@@ -244,12 +252,17 @@ async def process(
                 "rows": df_to_json_records_safe(df),
             })
 
-        return {
+        payload: Dict[str, Any] = {
             "ok": True,
             "type": "excel",
             "source": {"filename": filename, "content_type": ctype or "application/vnd.ms-excel"},
             "sheets": sheets,
         }
+
+        # store + return with job_id
+        job_id = uuid4().hex
+        STORED_RESULTS[job_id] = payload
+        return {"job_id": job_id, **payload}
 
     # ---------- PDF ----------
     if "pdf" in ctype or filename.lower().endswith(".pdf"):
@@ -286,10 +299,24 @@ async def process(
         }
         if use_llm:
             payload["llm"] = try_llm_normalize(raw_text_pages, table_sheets)
-        return payload
+
+        # store + return with job_id
+        job_id = uuid4().hex
+        STORED_RESULTS[job_id] = payload
+        return {"job_id": job_id, **payload}
 
     # ---------- Unsupported ----------
     return JSONResponse(
         status_code=415,
         content={"ok": False, "error": f"Unsupported content_type '{ctype}'. Please upload a PDF or Excel file."},
     )
+
+# -----------------------
+# Retrieval endpoint
+# -----------------------
+@app.get("/results/{job_id}")
+def get_results(job_id: str):
+    payload = STORED_RESULTS.get(job_id)
+    if payload is None:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Job ID not found"})
+    return payload
