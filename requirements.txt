@@ -1,0 +1,25 @@
+fastapi
+uvicorn
+python-multipart
+jinja2
+pandas
+pillow
+
+# PDF & OCR stack
+pypdfium2
+pymupdf
+pdfplumber
+pdfminer.six
+pytesseract
+camelot-py
+
+# XLSX writer backend
+openpyxl
+
+# Matching / dates
+rapidfuzz
+python-dateutil
+
+# LLM (already used by llm_normalize.py)
+openai
+python-dotenv
