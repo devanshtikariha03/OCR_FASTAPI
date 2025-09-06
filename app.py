@@ -15,7 +15,7 @@ from uuid import uuid4  # <-- added
 
 # ---- PDF text tools ----
 import pdfplumber                          # text/words/tables from text PDFs
-from pdfminer_high_level import extract_text as pdf_extract_text  # detect scanned
+from pdfminer.high_level import extract_text as pdf_extract_text  # detect scanned
 # If your import was actually: from pdfminer.high_level import extract_text
 # then keep that one instead and remove this alias line.
 
@@ -320,3 +320,4 @@ def get_results(job_id: str):
     if payload is None:
         return JSONResponse(status_code=404, content={"ok": False, "error": "Job ID not found"})
     return payload
+
