@@ -1,4 +1,4 @@
-# app.py — JSON-only extraction API for PDF + Excel (NaN/Inf-safe)
+# app.py — JSON-only extraction API for PDF + Excel + Images (NaN/Inf-safe)
 # Run:  python -m uvicorn app:app --reload
 
 from pathlib import Path
@@ -43,7 +43,7 @@ except Exception:
 
 
 BASE_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="PDF + Excel Extraction API (JSON)")
+app = FastAPI(title="PDF + Excel + Image Extraction API (JSON)")
 
 # -----------------------
 # In-memory store for results (dev/demo)
@@ -220,7 +220,7 @@ def try_llm_normalize(raw_text_pages: List[str], table_sheets: List[Tuple[str, p
 def root():
     return {
         "ok": True,
-        "message": "POST a file to /process (field: file). Supports PDF and Excel. Optional: use_llm=true (PDF only).",
+        "message": "POST a file to /process (field: file). Supports PDF, Images (JPEG/PNG/TIFF/BMP/WEBP), and Excel. Optional: use_llm=true (PDF only).",
     }
 
 @app.post("/process")
@@ -232,6 +232,31 @@ async def process(
     content = await file.read()
     filename = file.filename or "upload"
     ctype = (file.content_type or "").lower()
+
+    # ---------- Images (JPEG/PNG/TIFF/BMP/WEBP) ----------
+    if (
+        ctype.startswith("image/")
+        or filename.lower().endswith((".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"))
+    ):
+        try:
+            img = Image.open(io.BytesIO(content)).convert("RGB")  # PIL accepts file-like objects
+            raw_txt, words_df = ocr_page_to_df(img)
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"ok": False, "error": f"Image OCR failed: {e}"})
+
+        words_json = [{"name": "WORDS_Image", "rows": df_to_json_records_safe(words_df)}]
+        payload: Dict[str, Any] = {
+            "ok": True,
+            "type": "image",
+            "source": {"filename": filename, "content_type": ctype or "image/*"},
+            "is_scanned_pdf": False,
+            "raw_text_pages": [raw_txt],  # single-page analogue
+            "words": words_json,
+            "tables": [],                  # none by default for images
+        }
+        job_id = uuid4().hex
+        STORED_RESULTS[job_id] = payload
+        return {"job_id": job_id, **payload}
 
     # ---------- Excel ----------
     if (
@@ -308,7 +333,7 @@ async def process(
     # ---------- Unsupported ----------
     return JSONResponse(
         status_code=415,
-        content={"ok": False, "error": f"Unsupported content_type '{ctype}'. Please upload a PDF or Excel file."},
+        content={"ok": False, "error": f"Unsupported content_type '{ctype}'. Please upload an Image, PDF, or Excel file."},
     )
 
 # -----------------------
@@ -320,4 +345,3 @@ def get_results(job_id: str):
     if payload is None:
         return JSONResponse(status_code=404, content={"ok": False, "error": "Job ID not found"})
     return payload
-
