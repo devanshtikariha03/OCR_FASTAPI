@@ -6,6 +6,8 @@ from typing import Optional, Dict, Any, List, Tuple
 import io
 import os
 import math
+import tempfile
+import contextlib
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
@@ -16,8 +18,6 @@ from uuid import uuid4  # <-- added
 # ---- PDF text tools ----
 import pdfplumber                          # text/words/tables from text PDFs
 from pdfminer.high_level import extract_text as pdf_extract_text  # detect scanned
-# If your import was actually: from pdfminer.high_level import extract_text
-# then keep that one instead and remove this alias line.
 
 # ---- Optional scanned PDF OCR (safe to omit in deps) ----
 try:
@@ -57,12 +57,10 @@ def df_to_json_records_safe(df: pd.DataFrame) -> List[Dict[str, Any]]:
     """Return JSON-safe records: NaN/±Inf -> None (=> JSON null)."""
     if df is None or len(df) == 0:
         return []
-    # Replace ±Inf with NA, then convert NA to None
     df2 = (
         df.replace([np.inf, -np.inf], pd.NA)
           .where(pd.notnull(df), None)         # turn NA/NaN into None
     )
-    # Ensure plain Python scalars (avoid numpy types sneaking in)
     return df2.astype(object).to_dict(orient="records")
 
 def is_scanned_pdf(filepath: str) -> bool:
@@ -291,11 +289,13 @@ async def process(
 
     # ---------- PDF ----------
     if "pdf" in ctype or filename.lower().endswith(".pdf"):
-        tmp_dir = BASE_DIR / ".tmp"
-        tmp_dir.mkdir(exist_ok=True)
-        tmp_pdf_path = tmp_dir / filename
-        with open(tmp_pdf_path, "wb") as f:
-            f.write(content)
+        # Stage the PDF in a safe, writable temp file and always clean it up.
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(content)
+                tmp_pdf_path = Path(tmp.name)
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"ok": False, "error": f"Failed to stage PDF: {e}"})
 
         scanned = is_scanned_pdf(str(tmp_pdf_path))
         try:
@@ -305,6 +305,9 @@ async def process(
             if scanned and (not _HAVE_PDFIUM or not _HAVE_TESS):
                 detail = " (scanned PDFs require pypdfium2 + pytesseract + Tesseract binary)"
             return JSONResponse(status_code=400, content={"ok": False, "error": f"PDF extraction failed: {e}{detail}"})
+        finally:
+            with contextlib.suppress(Exception):
+                os.unlink(tmp_pdf_path)
 
         words_json = [{"name": name, "rows": df_to_json_records_safe(df)} for name, df in words_sheets]
         tables_json = [{
